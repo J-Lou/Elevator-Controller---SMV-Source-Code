@@ -1,0 +1,196 @@
+MODULE main
+	VAR
+		floorLevel : {1, 2, 3};
+		openDoor : boolean;
+		elevatorController : process Controller(floorLevel, openDoor);
+	ASSIGN
+		init(floorLevel) := 1;
+		init(openDoor) := TRUE;
+	-- 1. Calls to the elevator from floors(i.e., floor button) are eventually serviced
+	SPEC AG (elevatorController.floorButton1 -> AF ((floorLevel = 1) & (openDoor = TRUE)))
+	SPEC AG (elevatorController.floorButton2 -> AF ((floorLevel = 2) & (openDoor = TRUE)))
+	SPEC AG (elevatorController.floorButton3 -> AF ((floorLevel = 3) & (openDoor = TRUE)))
+	-- 2. Calls from within the elevator (elev. button) are eventually serviced
+	SPEC AG (elevatorController.elevatorButton1 -> AF ((floorLevel = 1) & (openDoor = TRUE)))
+	SPEC AG (elevatorController.elevatorButton2 -> AF ((floorLevel = 2) & (openDoor = TRUE)))
+	SPEC AG (elevatorController.elevatorButton3 -> AF ((floorLevel = 3) & (openDoor = TRUE)))
+	-- 3. The elevator never moves with its door open
+	SPEC AG ( (elevatorController.state != idle) xor (openDoor | (elevatorController.state = idle) ) )
+	-- 4. The elevator doors remain open until there is a request to use it
+	SPEC AG (!(elevatorController.elevatorButton1 | elevatorController.elevatorButton2 | elevatorController.elevatorButton3 | elevatorController.floorButton1 
+			| elevatorController.floorButton2 | elevatorController.floorButton3) -> AX (openDoor = TRUE) )
+	-- 5. It takes exactly 2 time units for the elevator to move between two consecutive floors
+	SPEC AG (!elevatorController.moving -> AX(elevatorController.moving) -> AX AX(!elevatorController.moving))
+	-- 6. If there are no requests for another floor, the elevator should not move.
+	SPEC AG ( !(elevatorController.requested1 | elevatorController.requested2 | elevatorController.requested3) -> (!elevatorController.moving))
+	-- 7. The elevator cannot change direction while moving
+	SPEC AG ( (elevatorController.state = up -> AX ((elevatorController.state = idle) | (elevatorController.state = up) ) ) 
+			| (elevatorController.state = down -> AX ((elevatorController.state = idle) | (elevatorController.state = down))))
+	-- 8. At the end-points of the elevator, it must be either idle or facing the direction where it is possible.
+	SPEC AG ( ((floorLevel = 1) -> ((elevatorController.state = up) | (elevatorController.state = idle) ) ) | ((floorLevel = 3) -> ((elevatorController.state = down) | (elevatorController.state = idle )) ))
+	-- 9. When the the elevator is idle, and the open button is pressed, the door will always open in the future
+	SPEC AG ( (elevatorController.open4) -> AF (openDoor) )
+MODULE Controller(floorLevel, openDoor)
+	VAR
+		state : {idle, down, up};
+		dir : {down, up};
+		elevatorButton1 : boolean;
+		elevatorButton2 : boolean;
+		elevatorButton3 : boolean;	
+		floorButton1 : boolean;
+		floorButton2 : boolean;
+		floorButton3 : boolean;		
+		openButton : boolean;		
+		--- Prevents cyclical deadlock
+		requested1 : boolean;
+		requested2 : boolean;
+		requested3 : boolean;
+		limit : {0, 1, 2};		
+	DEFINE
+		-- state states conditions
+		state1 := (state = idle) & (dir = up) & (floorLevel = 1) & (elevatorButton2 | elevatorButton3 | floorButton2 | floorButton3) & (!openDoor) & (!openButton);	
+		state2 := (state = idle) & (dir = up) & (floorLevel = 2) & (elevatorButton3 | floorButton3) & (!openDoor) & (!openButton);	
+		state3 := (state = idle) & (dir = down) & (floorLevel = 2) & (elevatorButton1 | floorButton1) & (!openDoor) & (!openButton);
+		state4 := (state = idle) & (dir = down) & (floorLevel = 3) & (elevatorButton1 | elevatorButton2 | floorButton1 | floorButton2) & (!openDoor) & (!openButton);
+		state5 := (state != idle);		
+		-- direction states conditions		
+		dir1 := (floorLevel = 2) & (dir = up) & (elevatorButton3 | floorButton3);
+		dir2 := (floorLevel = 2) & (dir = down) & !(elevatorButton1 | floorButton1) & (elevatorButton3 | floorButton3);
+		dir3 := (floorLevel = 2) & (dir = up) & !(elevatorButton3 | floorButton3) & (elevatorButton1 | floorButton1);
+		dir4 := (floorLevel = 2) & (dir = down) & (elevatorButton1 | floorButton1);		
+		--- door states conditions		
+		open1 := (state = idle) & (floorLevel = 1) & !(elevatorButton2 | elevatorButton3 | floorButton2 | floorButton3);
+		open2 := (state = idle) & (floorLevel = 2) & !(elevatorButton1 | elevatorButton3 | floorButton1 | floorButton3);
+		open3 := (state = idle) & (floorLevel = 3) & !(elevatorButton1 | elevatorButton2 | floorButton1 | floorButton2);		
+		open4 := (state = idle) & openButton;	
+		notOpen1 := (state = idle) & (floorLevel = 1) & (elevatorButton2 | elevatorButton3 | floorButton2 | floorButton3) & (!openButton);
+		notOpen2 := (state = idle) & (floorLevel = 2) & (elevatorButton1 | elevatorButton3 | floorButton1 | floorButton3) & (!openButton);
+		notOpen3 := (state = idle) & (floorLevel = 3) & (elevatorButton1 | elevatorButton2 | floorButton1 | floorButton2) & (!openButton);
+		-- checking if moving
+		moving := ((state = down) | (state = up) ) & !(state = idle);
+	ASSIGN
+		init(state) := idle;
+		next(state) :=
+			case
+				state1 : up;
+				state2 : up;
+				state3 : down;
+				state4 : down;
+				state5 : idle;
+				TRUE : state;
+			esac;
+		init(dir) := up;
+		next(dir) :=
+			case
+				(floorLevel = 1) : up;
+				dir1 : up;
+				dir2 : up;
+				dir3 : down;
+				dir4 : down;
+				(floorLevel = 3) : down;
+				TRUE : dir;
+			esac;
+		init(elevatorButton1) := FALSE;
+		next(elevatorButton1) := 
+			case
+				!(floorLevel = 1) & !elevatorButton1 : {TRUE, FALSE};
+				(floorLevel = 1) & openDoor : FALSE;
+				TRUE : elevatorButton1;
+			esac;
+		init(elevatorButton2) := FALSE;
+		next(elevatorButton2) := 
+			case
+				!(floorLevel = 2) & !elevatorButton2 : {TRUE, FALSE};
+				(floorLevel = 2) & openDoor : FALSE;
+				TRUE : elevatorButton2;
+			esac;
+		init(elevatorButton3) := FALSE;
+		next(elevatorButton3) := 
+			case
+				!(floorLevel = 3) & !elevatorButton3 : {TRUE, FALSE};
+				(floorLevel = 3) & openDoor : FALSE;
+				TRUE : elevatorButton3;
+			esac;
+				
+		init(floorButton1) := FALSE;
+		next(floorButton1) := 
+			case
+				!(floorLevel = 1) & !floorButton1 : {TRUE, FALSE};
+				(floorLevel = 1) & openDoor : FALSE;
+				TRUE : floorButton1;
+			esac;
+		init(floorButton2) := FALSE;
+		next(floorButton2) := 
+			case
+				!(floorLevel = 2) & !floorButton2 : {TRUE, FALSE};
+				(floorLevel = 2) & openDoor : FALSE;
+				TRUE : floorButton2;
+			esac;
+		init(floorButton3) := FALSE;
+		next(floorButton3) := 
+			case
+				!(floorLevel = 3) & !floorButton3 : {TRUE, FALSE};
+				(floorLevel = 3) & openDoor : FALSE;
+				TRUE : floorButton3;
+			esac;
+		init(requested1) := FALSE;
+		next(requested1) :=
+			case
+				(elevatorButton1 | floorButton1) : TRUE;
+				(floorLevel = 1) : FALSE;
+				TRUE : requested1;
+			esac;
+		init(requested2) := FALSE;
+		next(requested2) :=
+			case
+				(elevatorButton2 | floorButton2) : TRUE;
+				(floorLevel = 2) : FALSE;
+				TRUE : requested2;
+			esac;
+		init(requested3) := FALSE;
+		next(requested3) :=
+			case
+				(elevatorButton3 | floorButton3) : TRUE;
+				(floorLevel = 3) : FALSE;
+				TRUE : requested3;
+			esac;
+		init(openButton) := FALSE;
+		next(openButton) :=
+			case
+				(state = idle) & (limit != 2) : {TRUE, FALSE};
+				(limit = 2) : FALSE;
+				TRUE : openButton;
+			esac;
+		init(limit) := 0;
+		next(limit) :=
+			case
+				(state != idle) : 0;
+				((limit = 2) & !openDoor) : 0;
+				(limit = 0) & (openButton) : 1;
+				(limit = 1) & (openButton) : 2;
+				TRUE : limit;
+			esac;
+		next(floorLevel) :=
+			case
+				(floorLevel = 1) & (state = up) : 2;
+				(floorLevel = 2) & (state = down) : 1;
+				(floorLevel = 2) & (state = up) : 3;
+				(floorLevel = 3) & (state = down) : 2;
+				TRUE : floorLevel;
+			esac;
+		next(openDoor) :=
+			case
+				(state != idle) : TRUE;
+				open1 : TRUE;
+				open2 : TRUE;
+				open3 : TRUE;
+				open4 : TRUE;
+				notOpen1 : FALSE;
+				notOpen2 : FALSE;
+				notOpen3 : FALSE;
+				TRUE : openDoor;
+			esac;
+FAIRNESS running
+				
+		
+
